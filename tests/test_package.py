@@ -46,6 +46,29 @@ def test_transcripts_included_on_request(samples, tmp_path):
         dry_run=True,
     )
     assert "transcripts.parquet" in {f["name"] for f in m["files"]}
+    assert "transcripts.parquet" not in {f["path"] for f in m["dropped"]}
+
+
+def test_manifest_records_actual_dropped_paths(samples, tmp_path):
+    m = package_sample(samples["xenium"], tmp_path / "out", dry_run=True)
+    dropped = {item["path"]: item["reason"] for item in m["dropped"]}
+
+    assert "transcripts.parquet" in dropped
+    assert "optional by default" in dropped["transcripts.parquet"]
+    assert "cells.csv.gz" in dropped
+    assert "analysis/" in dropped
+    assert "preferred standard image" in dropped["morphology_focus.ome.tif"]
+    assert "cells.parquet" not in dropped
+
+
+def test_manifest_records_unmatched_files(samples, tmp_path):
+    extra = samples["visium"] / "unexpected.txt"
+    extra.write_text("not covered by a keep or drop rule")
+
+    m = package_sample(samples["visium"], tmp_path / "out", dry_run=True)
+    dropped = {item["path"]: item["reason"] for item in m["dropped"]}
+
+    assert dropped["unexpected.txt"] == "not selected by the keep-list"
 
 
 def test_drops_duplicate_formats(samples, tmp_path):
@@ -83,6 +106,9 @@ def test_archive_layout_and_manifest(samples, tmp_path):
     assert manifest["sample_id"] == "lung_A1"
     assert manifest["platform"] == "visium"
     assert all(len(f["sha256"]) == 64 for f in manifest["files"])
+    assert "spatial/aligned_fiducials.jpg" in {
+        item["path"] for item in manifest["dropped"]
+    }
 
 
 def test_does_not_overwrite_by_default(samples, tmp_path):
@@ -91,3 +117,20 @@ def test_does_not_overwrite_by_default(samples, tmp_path):
     with pytest.raises(FileExistsError):
         package_sample(samples["visium"], out)
     package_sample(samples["visium"], out, overwrite=True)  # ok
+
+
+@pytest.mark.parametrize(
+    "sample_id",
+    [
+        "",
+        ".",
+        "..",
+        "../escaped",
+        "nested/sample",
+        r"nested\sample",
+        "/tmp/escaped",
+    ],
+)
+def test_rejects_unsafe_sample_id(samples, tmp_path, sample_id):
+    with pytest.raises(ValueError, match="sample_id"):
+        package_sample(samples["visium"], tmp_path / "out", sample_id=sample_id)

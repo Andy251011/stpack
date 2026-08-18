@@ -55,7 +55,8 @@ lung_A1.tar.gz
 File names are standardised across platforms, so `expression.h5` means the
 same thing whether the sample came from Xenium or Visium. The manifest
 records the original vendor filename, size, and a SHA-256 checksum for
-each file.
+each file. Its `dropped` list records paths that were actually present but
+omitted, along with the reason; `dropped_rules` records the general rules.
 
 ## What gets kept
 

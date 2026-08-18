@@ -90,7 +90,7 @@ XENIUM = PlatformSpec(
             ["transcripts.parquet"],
             required=False,
             note="per-transcript coordinates; large, only needed for "
-            "re-segmentation. See KEEP_TRANSCRIPTS.",
+            "re-segmentation. Enable with --with-transcripts.",
         ),
     ],
     dropped={
@@ -99,6 +99,8 @@ XENIUM = PlatformSpec(
         "cell_feature_matrix/": "MTX-format duplicate of cell_feature_matrix.h5",
         "morphology.ome.tif": "full 3D z-stack (~2 GB); the MIP projection "
         "carries what downstream analysis needs",
+        "morphology_focus.ome.tif": "alternate 2D morphology image; the MIP "
+        "projection is the preferred standard image",
         "analysis/": "10x kmeans/graph clusters -- these are clusters, not "
         "cell types; we predict cell types ourselves",
         "analysis_summary.html": "human-readable report, no data",
@@ -174,11 +176,12 @@ VISIUM = PlatformSpec(
         "spatial/detected_tissue_image.jpg": "QC overlay for humans",
         "spatial/spatial_enrichment.csv": "downstream Moran's I result, "
         "not raw data",
+        "*_spatial.tar.gz": "download container for the extracted spatial/ files",
         "raw_feature_bc_matrix*": "includes off-tissue spots; filtered "
         "matrix is what analysis uses",
         "*.cloupe": "Loupe Browser proprietary format",
-        "*.bam / *.bam.bai": "read alignments, only needed to re-run "
-        "Space Ranger",
+        "*.bam": "read alignments, only needed to re-run Space Ranger",
+        "*.bam.bai": "read alignment index, only needed with the BAM file",
         "molecule_info.h5": "sequencing-level intermediate",
         "analysis/": "Space Ranger clusters -- clusters, not cell types",
         "web_summary.html": "human-readable report, no data",
