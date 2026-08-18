@@ -1,10 +1,31 @@
 import json
 import tarfile
+from importlib import import_module
 
 import pytest
 
 from make_fixtures import build_all
 from stpack import detect_platform, package_sample
+
+
+class BrokenArchive:
+    """Test double that simulates a failure while adding archive contents."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def add(self, *args, **kwargs):
+        raise OSError("simulated archive failure")
+
+
+def fail_archive_creation(monkeypatch):
+    package_module = import_module("stpack.package")
+    monkeypatch.setattr(
+        package_module.tarfile, "open", lambda *args, **kwargs: BrokenArchive()
+    )
 
 
 @pytest.fixture
@@ -117,6 +138,36 @@ def test_does_not_overwrite_by_default(samples, tmp_path):
     with pytest.raises(FileExistsError):
         package_sample(samples["visium"], out)
     package_sample(samples["visium"], out, overwrite=True)  # ok
+
+
+def test_failed_overwrite_preserves_existing_archive(
+    samples, tmp_path, monkeypatch
+):
+    out = tmp_path / "out"
+    package_sample(samples["visium"], out)
+    archive = out / "visium_lung.tar.gz"
+    original = archive.read_bytes()
+
+    fail_archive_creation(monkeypatch)
+
+    with pytest.raises(OSError, match="simulated archive failure"):
+        package_sample(samples["visium"], out, overwrite=True)
+
+    assert archive.read_bytes() == original
+    assert list(out.iterdir()) == [archive]
+
+
+def test_failed_first_write_leaves_no_partial_archive(
+    samples, tmp_path, monkeypatch
+):
+    out = tmp_path / "out"
+
+    fail_archive_creation(monkeypatch)
+
+    with pytest.raises(OSError, match="simulated archive failure"):
+        package_sample(samples["visium"], out)
+
+    assert list(out.iterdir()) == []
 
 
 @pytest.mark.parametrize(

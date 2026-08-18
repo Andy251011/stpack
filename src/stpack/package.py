@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import tarfile
 import tempfile
@@ -271,7 +272,22 @@ def package_sample(
         )
         (staging / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
-        with tarfile.open(archive_path, "w:gz") as tar:
+        # Build beside the final archive, then publish it atomically. If tar
+        # creation fails, TemporaryDirectory removes the partial file and an
+        # existing archive remains untouched.
+        temporary_archive = Path(tmp) / f"{sample_id}.tar.gz"
+        with tarfile.open(temporary_archive, "w:gz") as tar:
             tar.add(staging, arcname=sample_id)
+
+        if overwrite:
+            os.replace(temporary_archive, archive_path)
+        else:
+            try:
+                os.link(temporary_archive, archive_path)
+            except FileExistsError:
+                raise FileExistsError(
+                    f"{archive_path} exists (use overwrite=True)"
+                ) from None
+            temporary_archive.unlink()
 
     return manifest
