@@ -34,6 +34,7 @@ XENIUM_FILES = [
     "cell_feature_matrix/matrix.mtx.gz",
     "analysis/clustering/gene_expression_graphclust/clusters.csv",
     "analysis/clustering/gene_expression_kmeans_2_clusters/clusters.csv",
+    "analysis/diffexp/gene_expression_graphclust/differential_expression.csv",
     "analysis/pca/gene_expression_10_components/projection.csv",
     "analysis/umap/gene_expression_2_components/projection.csv",
 ]
@@ -60,6 +61,15 @@ VISIUM_OLD_FILES = [
     "spatial/tissue_hires_image.png",
 ]
 
+# A Visium sample where the full-resolution microscope image and the
+# separately-downloaded clustering results have both been placed next to
+# the matrix.
+VISIUM_WITH_EXTRAS_FILES = VISIUM_FILES + [
+    "CytAssist_FFPE_Human_Lung_Squamous_Cell_Carcinoma_tissue_image.tif",
+    "analysis/clustering/gene_expression_graphclust/clusters.csv",
+    "analysis/umap/gene_expression_2_components/projection.csv",
+]
+
 
 def make(root: Path, files: list[str]) -> Path:
     for rel in files:
@@ -74,6 +84,9 @@ def build_all(base: Path) -> dict[str, Path]:
         "xenium": make(base / "xenium_mouse_brain", XENIUM_FILES),
         "visium": make(base / "visium_lung", VISIUM_FILES),
         "visium_old": make(base / "visium_old_spaceranger", VISIUM_OLD_FILES),
+        "visium_extras": make(
+            base / "visium_with_extras", VISIUM_WITH_EXTRAS_FILES
+        ),
     }
 
 

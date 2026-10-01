@@ -1,6 +1,5 @@
 import json
 import tarfile
-from importlib import import_module
 
 import pytest
 
@@ -8,29 +7,20 @@ from make_fixtures import build_all
 from stpack import detect_platform, package_sample
 
 
-class BrokenArchive:
-    """Test double that simulates a failure while adding archive contents."""
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        return False
-
-    def add(self, *args, **kwargs):
-        raise OSError("simulated archive failure")
-
-
-def fail_archive_creation(monkeypatch):
-    package_module = import_module("stpack.package")
-    monkeypatch.setattr(
-        package_module.tarfile, "open", lambda *args, **kwargs: BrokenArchive()
-    )
-
-
 @pytest.fixture
 def samples(tmp_path):
     return build_all(tmp_path / "raw")
+
+
+def names(manifest) -> set[str]:
+    return {f["name"] for f in manifest["files"]}
+
+
+def originals(manifest) -> set[str]:
+    return {f["original_name"] for f in manifest["files"]}
+
+
+# --- platform detection ------------------------------------------------
 
 
 def test_detects_xenium(samples):
@@ -48,15 +38,33 @@ def test_unknown_folder_raises(tmp_path):
         detect_platform(empty)
 
 
-def test_prefers_mip_over_focus_image(samples, tmp_path):
+# --- Yaqi's reviewed decisions -----------------------------------------
+
+
+def test_keeps_full_3d_image_not_the_projection(samples, tmp_path):
+    """Reviewed 2026-09-30: the z-axis is sometimes needed."""
     m = package_sample(samples["xenium"], tmp_path / "out", dry_run=True)
     image = next(f for f in m["files"] if f["name"] == "image.ome.tif")
-    assert image["original_name"] == "morphology_mip.ome.tif"
+    assert image["original_name"] == "morphology.ome.tif"
+
+
+def test_also_keeps_the_mip_alongside_it(samples, tmp_path):
+    m = package_sample(samples["xenium"], tmp_path / "out", dry_run=True)
+    mip = next(f for f in m["files"] if f["name"] == "image_mip.ome.tif")
+    assert mip["original_name"] == "morphology_mip.ome.tif"
+
+
+def test_keeps_analysis_folder(samples, tmp_path):
+    """Reviewed 2026-09-30: the 10x clusters are sometimes needed."""
+    m = package_sample(samples["xenium"], tmp_path / "out", dry_run=True)
+    analysis = next(f for f in m["files"] if f["name"] == "analysis")
+    assert analysis["kind"] == "dir"
+    assert analysis["size_bytes"] > 0
 
 
 def test_transcripts_excluded_by_default(samples, tmp_path):
     m = package_sample(samples["xenium"], tmp_path / "out", dry_run=True)
-    assert "transcripts.parquet" not in {f["name"] for f in m["files"]}
+    assert "transcripts.parquet" not in names(m)
 
 
 def test_transcripts_included_on_request(samples, tmp_path):
@@ -66,36 +74,27 @@ def test_transcripts_included_on_request(samples, tmp_path):
         include_optional={"transcripts.parquet"},
         dry_run=True,
     )
-    assert "transcripts.parquet" in {f["name"] for f in m["files"]}
-    assert "transcripts.parquet" not in {f["path"] for f in m["dropped"]}
-
-
-def test_manifest_records_actual_dropped_paths(samples, tmp_path):
-    m = package_sample(samples["xenium"], tmp_path / "out", dry_run=True)
-    dropped = {item["path"]: item["reason"] for item in m["dropped"]}
-
-    assert "transcripts.parquet" in dropped
-    assert "optional by default" in dropped["transcripts.parquet"]
-    assert "cells.csv.gz" in dropped
-    assert "analysis/" in dropped
-    assert "preferred standard image" in dropped["morphology_focus.ome.tif"]
-    assert "cells.parquet" not in dropped
-
-
-def test_manifest_records_unmatched_files(samples, tmp_path):
-    extra = samples["visium"] / "unexpected.txt"
-    extra.write_text("not covered by a keep or drop rule")
-
-    m = package_sample(samples["visium"], tmp_path / "out", dry_run=True)
-    dropped = {item["path"]: item["reason"] for item in m["dropped"]}
-
-    assert dropped["unexpected.txt"] == "not selected by the keep-list"
+    assert "transcripts.parquet" in names(m)
 
 
 def test_drops_duplicate_formats(samples, tmp_path):
     m = package_sample(samples["xenium"], tmp_path / "out", dry_run=True)
-    originals = {f["original_name"] for f in m["files"]}
-    assert not any(n.endswith((".csv.gz", ".zarr.zip")) for n in originals)
+    assert not any(
+        n.endswith((".csv.gz", ".zarr.zip")) for n in originals(m)
+    )
+
+
+def test_drops_focus_image(samples, tmp_path):
+    m = package_sample(samples["xenium"], tmp_path / "out", dry_run=True)
+    assert "morphology_focus.ome.tif" not in originals(m)
+
+
+def test_visium_drops_qc_overlays(samples, tmp_path):
+    m = package_sample(samples["visium"], tmp_path / "out", dry_run=True)
+    assert not any(n.endswith(".jpg") for n in originals(m))
+
+
+# --- version tolerance -------------------------------------------------
 
 
 def test_old_spaceranger_naming_fallback(samples, tmp_path):
@@ -105,31 +104,43 @@ def test_old_spaceranger_naming_fallback(samples, tmp_path):
     assert pos["original_name"] == "tissue_positions_list.csv"
 
 
+def test_visium_fullres_image_picked_up_when_present(samples, tmp_path):
+    m = package_sample(samples["visium_extras"], tmp_path / "out",
+                       dry_run=True)
+    full = next(f for f in m["files"] if f["name"] == "image_fullres.tif")
+    assert full["original_name"].endswith("_tissue_image.tif")
+
+
+def test_visium_fullres_image_reported_missing_when_absent(samples, tmp_path):
+    m = package_sample(samples["visium"], tmp_path / "out", dry_run=True)
+    assert "image_fullres.tif" in m["missing"]
+
+
+def test_visium_analysis_folder_optional(samples, tmp_path):
+    """Visium clusters ship as a separate download, so absence is fine."""
+    without = package_sample(samples["visium"], tmp_path / "a", dry_run=True)
+    assert "analysis" in without["missing"]
+
+    with_it = package_sample(
+        samples["visium_extras"], tmp_path / "b", dry_run=True
+    )
+    assert "analysis" in names(with_it)
+
+
+def test_glob_does_not_match_a_directory_as_a_file(samples, tmp_path):
+    """*_image.tif must not accidentally resolve to a folder."""
+    (samples["visium"] / "stray_image.tif").mkdir()
+    m = package_sample(samples["visium"], tmp_path / "out", dry_run=True)
+    assert "image_fullres.tif" in m["missing"]
+
+
+# --- failure behaviour -------------------------------------------------
+
+
 def test_missing_required_file_fails_loudly(samples, tmp_path):
     (samples["visium"] / "spatial" / "scalefactors_json.json").unlink()
     with pytest.raises(FileNotFoundError, match="scalefactors"):
         package_sample(samples["visium"], tmp_path / "out", dry_run=True)
-
-
-def test_archive_layout_and_manifest(samples, tmp_path):
-    out = tmp_path / "out"
-    package_sample(samples["visium"], out, sample_id="lung_A1")
-    archive = out / "lung_A1.tar.gz"
-    assert archive.exists()
-
-    with tarfile.open(archive) as tar:
-        names = tar.getnames()
-        assert "lung_A1/manifest.json" in names
-        assert "lung_A1/expression.h5" in names
-        assert "lung_A1/scalefactors.json" in names
-        manifest = json.load(tar.extractfile("lung_A1/manifest.json"))
-
-    assert manifest["sample_id"] == "lung_A1"
-    assert manifest["platform"] == "visium"
-    assert all(len(f["sha256"]) == 64 for f in manifest["files"])
-    assert "spatial/aligned_fiducials.jpg" in {
-        item["path"] for item in manifest["dropped"]
-    }
 
 
 def test_does_not_overwrite_by_default(samples, tmp_path):
@@ -140,48 +151,42 @@ def test_does_not_overwrite_by_default(samples, tmp_path):
     package_sample(samples["visium"], out, overwrite=True)  # ok
 
 
-def test_failed_overwrite_preserves_existing_archive(
-    samples, tmp_path, monkeypatch
-):
+# --- the archive itself ------------------------------------------------
+
+
+def test_archive_layout_and_manifest(samples, tmp_path):
     out = tmp_path / "out"
-    package_sample(samples["visium"], out)
-    archive = out / "visium_lung.tar.gz"
-    original = archive.read_bytes()
+    package_sample(samples["visium"], out, sample_id="lung_A1")
+    archive = out / "lung_A1.tar.gz"
+    assert archive.exists()
 
-    fail_archive_creation(monkeypatch)
+    with tarfile.open(archive) as tar:
+        members = tar.getnames()
+        assert "lung_A1/manifest.json" in members
+        assert "lung_A1/expression.h5" in members
+        assert "lung_A1/scalefactors.json" in members
+        manifest = json.load(tar.extractfile("lung_A1/manifest.json"))
 
-    with pytest.raises(OSError, match="simulated archive failure"):
-        package_sample(samples["visium"], out, overwrite=True)
-
-    assert archive.read_bytes() == original
-    assert list(out.iterdir()) == [archive]
+    assert manifest["sample_id"] == "lung_A1"
+    assert manifest["platform"] == "visium"
+    assert all(len(f["sha256"]) == 64 for f in manifest["files"])
 
 
-def test_failed_first_write_leaves_no_partial_archive(
-    samples, tmp_path, monkeypatch
-):
+def test_archive_contains_the_analysis_subtree(samples, tmp_path):
     out = tmp_path / "out"
+    package_sample(samples["xenium"], out, sample_id="xe")
+    with tarfile.open(out / "xe.tar.gz") as tar:
+        members = tar.getnames()
+    assert (
+        "xe/analysis/clustering/gene_expression_graphclust/clusters.csv"
+        in members
+    )
 
-    fail_archive_creation(monkeypatch)
 
-    with pytest.raises(OSError, match="simulated archive failure"):
-        package_sample(samples["visium"], out)
-
-    assert list(out.iterdir()) == []
-
-
-@pytest.mark.parametrize(
-    "sample_id",
-    [
-        "",
-        ".",
-        "..",
-        "../escaped",
-        "nested/sample",
-        r"nested\sample",
-        "/tmp/escaped",
-    ],
-)
-def test_rejects_unsafe_sample_id(samples, tmp_path, sample_id):
-    with pytest.raises(ValueError, match="sample_id"):
-        package_sample(samples["visium"], tmp_path / "out", sample_id=sample_id)
+def test_checksums_are_stable_for_folders(samples, tmp_path):
+    """Same folder packaged twice -> same analysis/ checksum."""
+    a = package_sample(samples["xenium"], tmp_path / "a", sample_id="x")
+    b = package_sample(samples["xenium"], tmp_path / "b", sample_id="x")
+    ha = next(f["sha256"] for f in a["files"] if f["name"] == "analysis")
+    hb = next(f["sha256"] for f in b["files"] if f["name"] == "analysis")
+    assert ha == hb

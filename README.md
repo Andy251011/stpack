@@ -1,15 +1,15 @@
 # stpack
 
 Turns one raw spatial transcriptomics sample folder into one standardised
-`.tar.gz` containing only the files we actually need, plus a manifest
-recording what was kept, what was dropped, and why.
+`.tar.gz` containing only the files we need, plus a manifest recording what
+was kept, what was dropped, and why.
 
-Currently supports **Xenium** and **Visium** (including CytAssist).
+Supports **Xenium** and **Visium** (including CytAssist).
 
 ## Install
 
 ```bash
-git clone <repo> && cd stpack
+git clone https://github.com/Andy251011/stpack && cd stpack
 pip install -e .
 ```
 
@@ -24,7 +24,7 @@ stpack /path/to/xenium_mouse_brain --dry-run
 # Package it
 stpack /path/to/xenium_mouse_brain -o ./packaged
 
-# Xenium: also keep transcripts.parquet (large, off by default)
+# Xenium: also keep transcripts.parquet (~174 MB, off by default)
 stpack /path/to/xenium_mouse_brain -o ./packaged --with-transcripts
 
 # Batch
@@ -42,64 +42,76 @@ manifest = package_sample("data/visium_lung", "packaged", sample_id="lung_A1")
 ## Output
 
 ```
-lung_A1.tar.gz
-└── lung_A1/
+xenium_mouse_brain.tar.gz
+└── xenium_mouse_brain/
     ├── expression.h5
-    ├── tissue_positions.csv
-    ├── scalefactors.json
-    ├── image_hires.png
+    ├── cells.parquet
+    ├── cell_boundaries.parquet
+    ├── nucleus_boundaries.parquet
+    ├── image.ome.tif          # full 3D stack
+    ├── image_mip.ome.tif      # 2D projection of the same stack
+    ├── gene_panel.json
+    ├── experiment.xenium
     ├── metrics_summary.csv
+    ├── analysis/              # 10x clustering, diffexp, PCA, UMAP
     └── manifest.json
 ```
 
-File names are standardised across platforms, so `expression.h5` means the
-same thing whether the sample came from Xenium or Visium. The manifest
-records the original vendor filename, size, and a SHA-256 checksum for
-each file. Its `dropped` list records paths that were actually present but
-omitted, along with the reason; `dropped_rules` records the general rules.
+Names are standardised across platforms, so `expression.h5` means the same
+thing whether the sample came from Xenium or Visium. The manifest records
+each item's original vendor filename, size, and SHA-256.
 
 ## What gets kept
 
-The full decision table lives in `src/stpack/keeplists.py` — it is meant
-to be read and argued with, not buried. Summary:
+The decision table lives in `src/stpack/keeplists.py` — it is meant to be
+read and argued with, not buried.
 
 | Concept | Xenium | Visium |
 |---|---|---|
 | expression matrix | `cell_feature_matrix.h5` | `filtered_feature_bc_matrix.h5` |
 | coordinates | inside `cells.parquet` | `tissue_positions.csv` |
-| image | `morphology_mip.ome.tif` (DAPI) | `tissue_hires_image.png` (H&E) |
+| image | `morphology.ome.tif` (DAPI, 3D) | `tissue_hires_image.png` (H&E, 6% scale) |
 | coordinate-system info | `experiment.xenium` | `scalefactors_json.json` |
 | segmentation | `cell_boundaries.parquet` | — (spots are not cells) |
-| transcript coords | `transcripts.parquet` (optional) | — |
+| 10x clusters | `analysis/` | `analysis/` (separate download) |
+| transcript coords | `transcripts.parquet` (opt-in) | — |
 
 Two rules do most of the work:
 
 1. **Drop duplicate encodings.** 10x ships the same table as `.csv.gz`,
-   `.parquet` and `.zarr.zip`; we keep only `.parquet`. On the Xenium
-   mouse brain sample this alone removes ~900 MB with no information loss.
-   The same rule applies on Visium (`.h5` vs the MTX triplet).
-2. **Drop derived results.** `analysis/` clusters, `spatial_enrichment.csv`,
-   QC overlay JPEGs and HTML reports are outputs of someone else's
-   analysis, not raw data. In particular the 10x clusters are *clusters*,
-   not cell types.
+   `.parquet` and `.zarr.zip`; we keep only `.parquet`. On the Xenium mouse
+   brain sample this removes ~900 MB with no information loss. Same rule on
+   Visium (`.h5` vs the MTX triplet).
+2. **Drop human-facing artefacts.** QC overlay JPEGs, HTML reports, and
+   Loupe/Explorer-only formats carry no data we cannot recompute.
 
-## Open questions
+Note that the 10x `analysis/` clusters *are* kept, even though they are
+clusters rather than cell types — they are occasionally needed, and the
+folder is only ~12 MB.
 
-Marked here rather than silently decided:
+## Review history
 
-1. **Xenium image.** We keep `morphology_mip.ome.tif` (~207 MB, 2D
-   projection) over `morphology.ome.tif` (~2 GB, full 3D z-stack).
-   Confirm the 3D stack is not needed.
-2. **`transcripts.parquet`** (~174 MB). The only route to re-segmentation,
-   dead weight otherwise. Currently opt-in via `--with-transcripts`.
-3. **Visium full-resolution H&E.** `tissue_hires_image.png` is only ~5.6%
-   of full resolution — a 55 µm spot is about 14 px across, too small for
-   image patches. The real full-resolution image is a Space Ranger *input*,
-   not an output, so it must be supplied separately. `image_fullres.tif`
-   is in the keep-list as optional and will be picked up if present.
-4. **Sample granularity.** One archive per tissue section. If one donor
-   has several sections, or the same section is run on both platforms,
-   confirm they stay separate.
+Decisions confirmed with Yaqi on 2026-09-30:
+
+- dropping duplicate encodings — confirmed
+- standardised naming — confirmed
+- `analysis/` clusters — **keep** (changed from dropping them)
+- Xenium image — **keep the full 2.2 GB 3D stack**, the z-axis is sometimes
+  needed (changed from keeping only the MIP). The MIP is kept alongside it
+  since it is cheap and most 2D work wants it.
+- `transcripts.parquet` — not needed, no re-segmentation planned. Left
+  behind `--with-transcripts` rather than deleted, in case expression ever
+  has to be re-assigned from raw transcript coordinates.
+
+## Open question
+
+**Visium full-resolution H&E.** `tissue_hires_image.png` is only ~5.6% of
+full resolution — a 55 µm spot is about 14 px across, too small for image
+patches or nuclear segmentation. The real full-resolution microscope image
+is a Space Ranger *input*, not an output, so it is not in the downloaded
+folder. `image_fullres.tif` is in the keep-list as optional and is picked
+up automatically if the file is placed next to the matrix. Some datasets
+genuinely have no original image.
 
 ## Tests
 
@@ -108,5 +120,5 @@ pip install -e ".[dev]"
 python -m pytest tests/
 ```
 
-Tests run against synthetic folders that mirror the real 10x layouts
-(`tests/make_fixtures.py`), so they need no data download.
+21 tests, running against synthetic folders that mirror the real 10x
+layouts (`tests/make_fixtures.py`), so no data download is needed.

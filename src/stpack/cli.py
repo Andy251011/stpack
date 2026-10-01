@@ -7,7 +7,6 @@ import json
 import sys
 from pathlib import Path
 
-from .detect import detect_platform
 from .keeplists import PLATFORMS
 from .package import package_sample
 
@@ -25,10 +24,11 @@ def _print_summary(manifest: dict, dry_run: bool) -> None:
     total = sum(f["size_bytes"] for f in manifest["files"])
     header = "DRY RUN -- nothing written" if dry_run else "packaged"
     print(f"\n{manifest['sample_id']}  [{manifest['platform']}]  {header}")
-    print(f"  {len(manifest['files'])} files, {_human(total)} total\n")
+    print(f"  {len(manifest['files'])} items, {_human(total)} total\n")
     for f in manifest["files"]:
-        print(f"    {f['name']:<28} {_human(f['size_bytes']):>10}"
-              f"   <- {f['original_name']}")
+        suffix = "/" if f["kind"] == "dir" else ""
+        print(f"    {f['name'] + suffix:<28} {_human(f['size_bytes']):>10}"
+              f"   <- {f['original_name']}{suffix}")
     if manifest["missing"]:
         print(f"\n  not found (optional): {', '.join(manifest['missing'])}")
     print()
@@ -49,7 +49,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="skip auto-detection")
     parser.add_argument("--with-transcripts", action="store_true",
                         help="Xenium only: also keep transcripts.parquet "
-                             "(large; needed for re-segmentation)")
+                             "(~174 MB; only needed to re-assign expression "
+                             "from raw transcript coordinates)")
     parser.add_argument("--dry-run", action="store_true",
                         help="show what would be kept, write nothing")
     parser.add_argument("--overwrite", action="store_true")

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stpack"
-version = "0.1.0"
+version = "0.2.0"
 description = "Standardise raw spatial transcriptomics sample folders into per-sample archives"
 requires-python = ">=3.10"
 dependencies = []
